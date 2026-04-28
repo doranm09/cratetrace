@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-label="Cratetrace icon">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#134e8a"/>
+      <stop offset="100%" stop-color="#0ea5e9"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="128" height="128" rx="20" fill="url(#bg)"/>
+  <g fill="none" stroke="#e0f2fe" stroke-linecap="round" stroke-width="8">
+    <path d="M24 36h28"/>
+    <path d="M24 64h44"/>
+    <path d="M24 92h60"/>
+    <path d="M52 36l20 0"/>
+    <path d="M68 64l20 0"/>
+    <path d="M84 92l20 0"/>
+    <path d="M52 36v28"/>
+    <path d="M68 64v28"/>
+  </g>
+  <g fill="#e0f2fe">
+    <circle cx="52" cy="36" r="6"/>
+    <circle cx="68" cy="64" r="6"/>
+    <circle cx="84" cy="92" r="6"/>
+    <circle cx="104" cy="92" r="6"/>
+    <circle cx="88" cy="64" r="6"/>
+    <circle cx="72" cy="36" r="6"/>
+  </g>
+</svg>

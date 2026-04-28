@@ -2,8 +2,8 @@
   "name": "cratetrace",
   "displayName": "Cratetrace",
   "description": "Generate and navigate commit-oriented Rust history graphs via the cratetrace CLI.",
-  "version": "0.0.1",
-  "publisher": "local",
+  "version": "0.1.0",
+  "publisher": "michaeldoran",
   "engines": {
     "vscode": "^1.90.0"
   },
@@ -87,5 +87,23 @@
         }
       }
     }
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/michaeldoran/cratetrace.git"
+  },
+  "homepage": "https://github.com/michaeldoran/cratetrace#readme",
+  "bugs": {
+    "url": "https://github.com/michaeldoran/cratetrace/issues"
+  },
+  "license": "MIT",
+  "keywords": [
+    "rust",
+    "git",
+    "visualization",
+    "graphs",
+    "mermaid",
+    "history"
+  ],
+  "icon": "media/icon.svg"
 }
