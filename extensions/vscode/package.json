@@ -106,4 +106,10 @@
     "history"
   ],
   "icon": "media/icon.svg"
+  "scripts": {
+    "bundle:cli": "node ./scripts/release.js bundle",
+    "validate:cli": "node ./scripts/release.js validate",
+    "package:target": "node ./scripts/release.js package",
+    "release:target": "node ./scripts/release.js release"
+  }
 }
