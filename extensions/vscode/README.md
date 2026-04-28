@@ -39,15 +39,55 @@ Published builds should bundle the CLI inside the extension under `bin/`.
 
 ## Publishing
 
-For a platform-specific Marketplace release:
+Use the release helper scripts in `extensions/vscode/package.json` to build, validate, and package platform-targeted VSIX artifacts.
 
 1. Build `cratetrace-cli` for the target platform
 2. Copy it into `extensions/vscode/bin/` as `cratetrace-cli` or `cratetrace-cli.exe`
 3. Confirm `package.json` Marketplace metadata is release-ready (`publisher`, `version`, `repository`, `homepage`, `bugs`, `license`, `keywords`, and `icon`)
 4. Run a packaging check (`vsce package --no-dependencies`) to validate Marketplace metadata and icon wiring
 5. Package or publish the extension with `vsce --target <platform>`
+### Expected bundled CLI names
 
-VS Code will install the matching platform package when you publish platform-specific VSIX artifacts.
+The extension only recognizes these bundled filenames under `extensions/vscode/bin/`:
+
+- non-Windows targets: `cratetrace-cli`
+- Windows targets: `cratetrace-cli.exe`
+
+If the expected binary is missing for the selected target, packaging must fail.
+
+### Release workflow
+
+Run from `extensions/vscode/`:
+
+1. Build and copy the target CLI into `bin/`:
+   - `npm run bundle:cli -- --target <target>`
+2. Validate the target bundle exists and is non-empty:
+   - `npm run validate:cli -- --target <target>`
+3. Package with `vsce --target`:
+   - `npm run package:target -- --target <target>`
+
+Or run the full sequence in one command:
+
+- `npm run release:target -- --target <target>`
+
+Supported `<target>` values are:
+
+- `linux-x64`, `linux-arm64`, `linux-armhf`
+- `alpine-x64`, `alpine-arm64`
+- `darwin-x64`, `darwin-arm64`
+- `win32-x64`, `win32-arm64`
+
+### VSIX artifact naming convention
+
+`package:target` writes artifacts to `extensions/vscode/dist/` with this exact naming format:
+
+- `cratetrace-<extension-version>-<target>.vsix`
+
+Example:
+
+- `cratetrace-0.0.1-linux-x64.vsix`
+
+VS Code Marketplace can consume these platform-targeted VSIX outputs when publishing by target.
 
 ## Development settings
 
