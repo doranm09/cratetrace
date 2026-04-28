@@ -20,6 +20,10 @@ pub struct CommitArtifact {
     pub added_modules: usize,
     pub modified_modules: usize,
     pub removed_modules: usize,
+    pub total_dependency_edges: usize,
+    pub added_dependency_edges: usize,
+    pub removed_dependency_edges: usize,
+    pub changed_dependency_edges: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -33,6 +37,10 @@ pub struct RollupArtifact {
     pub added_modules: usize,
     pub modified_modules: usize,
     pub removed_modules: usize,
+    pub total_dependency_edges: usize,
+    pub added_dependency_edges: usize,
+    pub removed_dependency_edges: usize,
+    pub changed_dependency_edges: usize,
 }
 
 #[derive(Debug, Clone)]

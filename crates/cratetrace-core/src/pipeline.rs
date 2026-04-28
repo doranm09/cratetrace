@@ -32,8 +32,32 @@ pub fn trace_history(options: &TraceOptions) -> Result<TraceReport> {
         None => Vec::new(),
     };
     let final_paths = git::list_paths_at_commit(&options.repo_root, &last_commit.sha)?;
-    let rollup_render =
-        graph::render_range_rollup_graph(&options.revision_range, &commits, &final_paths, &baseline_paths);
+    let baseline_rust_paths = baseline_paths
+        .iter()
+        .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
+        .cloned()
+        .collect::<Vec<PathBuf>>();
+    let final_rust_paths = final_paths
+        .iter()
+        .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
+        .cloned()
+        .collect::<Vec<PathBuf>>();
+    let baseline_files = match &first_commit.parent_sha {
+        Some(parent_sha) => {
+            git::read_files_at_commit(&options.repo_root, parent_sha, &baseline_rust_paths)?
+        }
+        None => Vec::new(),
+    };
+    let final_files =
+        git::read_files_at_commit(&options.repo_root, &last_commit.sha, &final_rust_paths)?;
+    let rollup_render = graph::render_range_rollup_graph(
+        &options.revision_range,
+        &commits,
+        &final_paths,
+        &baseline_paths,
+        &final_files,
+        &baseline_files,
+    );
     let rollup_dot_path = options.output_dir.join("rollup.dot");
     fs::write(&rollup_dot_path, rollup_render.dot)?;
     let rollup_mermaid_path = options.output_dir.join("rollup.mmd");
@@ -53,6 +77,10 @@ pub fn trace_history(options: &TraceOptions) -> Result<TraceReport> {
         added_modules: rollup_render.added_modules,
         modified_modules: rollup_render.modified_modules,
         removed_modules: rollup_render.removed_modules,
+        total_dependency_edges: rollup_render.total_dependency_edges,
+        added_dependency_edges: rollup_render.added_dependency_edges,
+        removed_dependency_edges: rollup_render.removed_dependency_edges,
+        changed_dependency_edges: rollup_render.changed_dependency_edges,
     };
     let mut artifacts = Vec::new();
 
@@ -62,7 +90,31 @@ pub fn trace_history(options: &TraceOptions) -> Result<TraceReport> {
             Some(parent_sha) => git::list_paths_at_commit(&options.repo_root, parent_sha)?,
             None => Vec::new(),
         };
-        let rendered = graph::render_commit_graph(&commit, &current_paths, &previous_paths);
+        let current_rust_paths = current_paths
+            .iter()
+            .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
+            .cloned()
+            .collect::<Vec<PathBuf>>();
+        let previous_rust_paths = previous_paths
+            .iter()
+            .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
+            .cloned()
+            .collect::<Vec<PathBuf>>();
+        let current_files =
+            git::read_files_at_commit(&options.repo_root, &commit.sha, &current_rust_paths)?;
+        let previous_files = match &commit.parent_sha {
+            Some(parent_sha) => {
+                git::read_files_at_commit(&options.repo_root, parent_sha, &previous_rust_paths)?
+            }
+            None => Vec::new(),
+        };
+        let rendered = graph::render_commit_graph(
+            &commit,
+            &current_paths,
+            &previous_paths,
+            &current_files,
+            &previous_files,
+        );
         let dot_path = commit_dir.join(format!("{}.dot", commit.short_sha));
         fs::write(&dot_path, rendered.dot)?;
         let mermaid_path = commit_dir.join(format!("{}.mmd", commit.short_sha));
@@ -83,6 +135,10 @@ pub fn trace_history(options: &TraceOptions) -> Result<TraceReport> {
             added_modules: rendered.added_modules,
             modified_modules: rendered.modified_modules,
             removed_modules: rendered.removed_modules,
+            total_dependency_edges: rendered.total_dependency_edges,
+            added_dependency_edges: rendered.added_dependency_edges,
+            removed_dependency_edges: rendered.removed_dependency_edges,
+            changed_dependency_edges: rendered.changed_dependency_edges,
         });
     }
 
@@ -150,6 +206,13 @@ fn render_index(report: &TraceReport, output_dir: &Path) -> String {
         report.rollup.removed_modules
     ));
     out.push_str(&format!(
+        "- Dependency edges: total=`{}` added=`{}` removed=`{}` changed=`{}`\n",
+        report.rollup.total_dependency_edges,
+        report.rollup.added_dependency_edges,
+        report.rollup.removed_dependency_edges,
+        report.rollup.changed_dependency_edges
+    ));
+    out.push_str(&format!(
         "- DOT: `{}`\n",
         relative_display(&report.rollup.dot_path, output_dir)
     ));
@@ -183,6 +246,13 @@ fn render_index(report: &TraceReport, output_dir: &Path) -> String {
             artifact.removed_modules
         ));
         out.push_str(&format!(
+            "- Dependency edges: total=`{}` added=`{}` removed=`{}` changed=`{}`\n",
+            artifact.total_dependency_edges,
+            artifact.added_dependency_edges,
+            artifact.removed_dependency_edges,
+            artifact.changed_dependency_edges
+        ));
+        out.push_str(&format!(
             "- DOT: `{}`\n",
             relative_display(&artifact.dot_path, output_dir)
         ));
@@ -213,10 +283,7 @@ fn render_timeline(report: &TraceReport, output_dir: &Path) -> String {
         relative_display(&report.rollup.dot_path, output_dir),
         optional_relative_display(&report.rollup.svg_path, output_dir),
         relative_display(&report.rollup.mermaid_path, output_dir),
-        sanitize_manifest_field(&format!(
-            "Range roll-up {}",
-            report.rollup.revision_range
-        ))
+        sanitize_manifest_field(&format!("Range roll-up {}", report.rollup.revision_range))
     ));
 
     for artifact in &report.commits {

@@ -59,10 +59,38 @@ pub fn list_paths_at_commit(repo_root: &Path, sha: &str) -> Result<Vec<PathBuf>>
         .collect())
 }
 
+pub fn read_files_at_commit(
+    repo_root: &Path,
+    sha: &str,
+    paths: &[PathBuf],
+) -> Result<Vec<(PathBuf, String)>> {
+    let mut files = Vec::new();
+    for path in paths {
+        let spec = format!("{sha}:{}", path.display());
+        let output = git_bytes(repo_root, &["show", &spec])?;
+        let content = String::from_utf8(output).map_err(|err| {
+            CratetraceError::new(format!(
+                "git show emitted non-utf8 for {} at {}: {err}",
+                path.display(),
+                sha
+            ))
+        })?;
+        files.push((path.clone(), content));
+    }
+    Ok(files)
+}
+
 fn changed_paths(repo_root: &Path, sha: &str) -> Result<Vec<PathBuf>> {
     let output = git(
         repo_root,
-        &["diff-tree", "--root", "--no-commit-id", "--name-only", "-r", sha],
+        &[
+            "diff-tree",
+            "--root",
+            "--no-commit-id",
+            "--name-only",
+            "-r",
+            sha,
+        ],
     )?;
 
     Ok(output
@@ -73,7 +101,17 @@ fn changed_paths(repo_root: &Path, sha: &str) -> Result<Vec<PathBuf>> {
 }
 
 fn git(repo_root: &Path, args: &[&str]) -> Result<String> {
-    let output = Command::new("git").args(args).current_dir(repo_root).output()?;
+    let output = git_bytes(repo_root, args)?;
+
+    String::from_utf8(output)
+        .map_err(|err| CratetraceError::new(format!("git emitted non-utf8 output: {err}")))
+}
+
+fn git_bytes(repo_root: &Path, args: &[&str]) -> Result<Vec<u8>> {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(repo_root)
+        .output()?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -84,6 +122,5 @@ fn git(repo_root: &Path, args: &[&str]) -> Result<String> {
         )));
     }
 
-    String::from_utf8(output.stdout)
-        .map_err(|err| CratetraceError::new(format!("git emitted non-utf8 output: {err}")))
+    Ok(output.stdout)
 }

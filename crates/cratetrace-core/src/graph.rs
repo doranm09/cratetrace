@@ -11,12 +11,18 @@ pub struct GraphRender {
     pub added_modules: usize,
     pub modified_modules: usize,
     pub removed_modules: usize,
+    pub total_dependency_edges: usize,
+    pub added_dependency_edges: usize,
+    pub removed_dependency_edges: usize,
+    pub changed_dependency_edges: usize,
 }
 
 pub fn render_commit_graph(
     commit: &CommitRecord,
     current_paths: &[PathBuf],
     previous_paths: &[PathBuf],
+    current_files: &[(PathBuf, String)],
+    previous_files: &[(PathBuf, String)],
 ) -> GraphRender {
     let current_modules = module_labels_from_paths(current_paths);
     let previous_modules = module_labels_from_paths(previous_paths);
@@ -41,6 +47,8 @@ pub fn render_commit_graph(
         &previous_modules,
         &modified_modules,
         &non_rust_changed_files,
+        current_files,
+        previous_files,
     )
 }
 
@@ -49,6 +57,8 @@ pub fn render_range_rollup_graph(
     commits: &[CommitRecord],
     final_paths: &[PathBuf],
     baseline_paths: &[PathBuf],
+    final_files: &[(PathBuf, String)],
+    baseline_files: &[(PathBuf, String)],
 ) -> GraphRender {
     let current_modules = module_labels_from_paths(final_paths);
     let previous_modules = module_labels_from_paths(baseline_paths);
@@ -92,6 +102,8 @@ pub fn render_range_rollup_graph(
         &previous_modules,
         &modified_modules,
         &non_rust_changed_files,
+        final_files,
+        baseline_files,
     )
 }
 
@@ -104,6 +116,8 @@ fn render_project_diff_graph(
     previous_modules: &BTreeSet<String>,
     modified_modules: &BTreeSet<String>,
     non_rust_changed_files: &[String],
+    current_files: &[(PathBuf, String)],
+    previous_files: &[(PathBuf, String)],
 ) -> GraphRender {
     let added_modules = current_modules
         .difference(previous_modules)
@@ -126,6 +140,16 @@ fn render_project_diff_graph(
     );
     let source_files = module_file_map(current_paths, previous_paths);
     let changed_files = module_file_map(changed_paths, &[]);
+    let current_dependency_edges = dependency_edges(current_paths, current_files);
+    let previous_dependency_edges = dependency_edges(previous_paths, previous_files);
+    let added_dependency_edges = current_dependency_edges
+        .difference(&previous_dependency_edges)
+        .cloned()
+        .collect::<BTreeSet<DependencyEdge>>();
+    let removed_dependency_edges = previous_dependency_edges
+        .difference(&current_dependency_edges)
+        .cloned()
+        .collect::<BTreeSet<DependencyEdge>>();
 
     let dot = render_dot_graph(
         header_lines,
@@ -137,6 +161,9 @@ fn render_project_diff_graph(
         &source_files,
         &changed_files,
         non_rust_changed_files,
+        &current_dependency_edges,
+        &added_dependency_edges,
+        &removed_dependency_edges,
     );
     let mermaid = render_mermaid_graph(
         current_modules,
@@ -147,6 +174,9 @@ fn render_project_diff_graph(
         &source_files,
         &changed_files,
         non_rust_changed_files,
+        &current_dependency_edges,
+        &added_dependency_edges,
+        &removed_dependency_edges,
     );
 
     GraphRender {
@@ -156,6 +186,10 @@ fn render_project_diff_graph(
         added_modules: added_modules.len(),
         modified_modules: modified_modules.len(),
         removed_modules: removed_modules.len(),
+        total_dependency_edges: current_dependency_edges.len(),
+        added_dependency_edges: added_dependency_edges.len(),
+        removed_dependency_edges: removed_dependency_edges.len(),
+        changed_dependency_edges: added_dependency_edges.len() + removed_dependency_edges.len(),
     }
 }
 
@@ -169,6 +203,9 @@ fn render_dot_graph(
     source_files: &BTreeMap<String, Vec<String>>,
     changed_files: &BTreeMap<String, Vec<String>>,
     non_rust_changed_files: &[String],
+    current_dependency_edges: &BTreeSet<DependencyEdge>,
+    added_dependency_edges: &BTreeSet<DependencyEdge>,
+    removed_dependency_edges: &BTreeSet<DependencyEdge>,
 ) -> String {
     let mut out = String::new();
     out.push_str("digraph cratetrace {\n");
@@ -182,6 +219,9 @@ fn render_dot_graph(
         modified_modules.len(),
         removed_modules.len(),
         non_rust_changed_files.len(),
+        current_dependency_edges.len(),
+        added_dependency_edges.len(),
+        removed_dependency_edges.len(),
     ));
     out.push_str(">];\n");
     out.push_str(
@@ -222,6 +262,31 @@ fn render_dot_graph(
         }
     }
 
+    for edge in current_dependency_edges {
+        if displayed_modules.contains(&edge.from) && displayed_modules.contains(&edge.to) {
+            let color = if added_dependency_edges.contains(edge) {
+                "forestgreen"
+            } else {
+                "gray45"
+            };
+            out.push_str(&format!(
+                "  {} -> {} [label=\"uses\", arrowhead=vee, style=dashed, color={}];\n",
+                node_id(&edge.from),
+                node_id(&edge.to),
+                color
+            ));
+        }
+    }
+    for edge in removed_dependency_edges {
+        if displayed_modules.contains(&edge.from) && displayed_modules.contains(&edge.to) {
+            out.push_str(&format!(
+                "  {} -> {} [label=\"uses (removed)\", arrowhead=vee, style=\"dashed\", color=firebrick3, constraint=false];\n",
+                node_id(&edge.from),
+                node_id(&edge.to)
+            ));
+        }
+    }
+
     if !non_rust_changed_files.is_empty() {
         out.push_str(&format!(
             "  non_rust [shape=note, fillcolor=gray95, label=\"{}\"];\n",
@@ -246,15 +311,24 @@ fn render_mermaid_graph(
     source_files: &BTreeMap<String, Vec<String>>,
     changed_files: &BTreeMap<String, Vec<String>>,
     non_rust_changed_files: &[String],
+    current_dependency_edges: &BTreeSet<DependencyEdge>,
+    _added_dependency_edges: &BTreeSet<DependencyEdge>,
+    removed_dependency_edges: &BTreeSet<DependencyEdge>,
 ) -> String {
     let mut out = String::new();
     out.push_str("flowchart TD\n");
-    out.push_str("  classDef workspace fill:#f8fafc,stroke:#475569,stroke-width:2px,color:#0f172a;\n");
+    out.push_str(
+        "  classDef workspace fill:#f8fafc,stroke:#475569,stroke-width:2px,color:#0f172a;\n",
+    );
     out.push_str("  classDef unchanged fill:#eff6ff,stroke:#64748b,color:#0f172a;\n");
     out.push_str("  classDef added fill:#dcfce7,stroke:#15803d,color:#14532d;\n");
     out.push_str("  classDef modified fill:#fef3c7,stroke:#b45309,color:#78350f;\n");
-    out.push_str("  classDef removed fill:#fee2e2,stroke:#b91c1c,color:#7f1d1d,stroke-dasharray: 5 3;\n");
-    out.push_str("  classDef note fill:#f8fafc,stroke:#64748b,color:#334155,stroke-dasharray: 4 2;\n");
+    out.push_str(
+        "  classDef removed fill:#fee2e2,stroke:#b91c1c,color:#7f1d1d,stroke-dasharray: 5 3;\n",
+    );
+    out.push_str(
+        "  classDef note fill:#f8fafc,stroke:#64748b,color:#334155,stroke-dasharray: 4 2;\n",
+    );
     out.push_str("  workspace[\"workspace\"]\n");
     out.push_str("  class workspace workspace;\n");
 
@@ -283,14 +357,29 @@ fn render_mermaid_graph(
     for module in displayed_modules {
         if let Some(parent) = parent_module(module) {
             if displayed_modules.contains(&parent) {
-                out.push_str(&format!(
-                    "  {} --> {}\n",
-                    node_id(&parent),
-                    node_id(module)
-                ));
+                out.push_str(&format!("  {} --> {}\n", node_id(&parent), node_id(module)));
             }
         } else {
             out.push_str(&format!("  workspace --> {}\n", node_id(module)));
+        }
+    }
+
+    for edge in current_dependency_edges {
+        if displayed_modules.contains(&edge.from) && displayed_modules.contains(&edge.to) {
+            out.push_str(&format!(
+                "  {} -. uses .-> {}\n",
+                node_id(&edge.from),
+                node_id(&edge.to)
+            ));
+        }
+    }
+    for edge in removed_dependency_edges {
+        if displayed_modules.contains(&edge.from) && displayed_modules.contains(&edge.to) {
+            out.push_str(&format!(
+                "  {} -. uses removed .-> {}\n",
+                node_id(&edge.from),
+                node_id(&edge.to)
+            ));
         }
     }
 
@@ -347,9 +436,7 @@ fn render_module_node(
         return format!("  {node_id} [fillcolor=aliceblue, label=\"{label}\"];\n");
     }
 
-    format!(
-        "  {node_id} [fillcolor=white, style=\"rounded,dashed\", label=\"{label}\"];\n"
-    )
+    format!("  {node_id} [fillcolor=white, style=\"rounded,dashed\", label=\"{label}\"];\n")
 }
 
 fn render_graph_label(
@@ -359,10 +446,20 @@ fn render_graph_label(
     modified_modules: usize,
     removed_modules: usize,
     non_rust_changes: usize,
+    dependency_edges: usize,
+    added_dependency_edges: usize,
+    removed_dependency_edges: usize,
 ) -> String {
     let summary = format!(
-        "modules={} added={} modified={} removed={} non_rust_changes={}",
-        total_modules, added_modules, modified_modules, removed_modules, non_rust_changes
+        "modules={} added={} modified={} removed={} non_rust_changes={} dependency_edges={} dependency_added={} dependency_removed={}",
+        total_modules,
+        added_modules,
+        modified_modules,
+        removed_modules,
+        non_rust_changes,
+        dependency_edges,
+        added_dependency_edges,
+        removed_dependency_edges
     );
     let mut detail_html = String::new();
     for line in header_lines {
@@ -391,13 +488,15 @@ fn render_graph_label(
 }
 
 fn module_labels_from_paths(paths: &[PathBuf]) -> BTreeSet<String> {
-    paths.iter()
+    paths
+        .iter()
         .filter_map(|path| rust_module_label(path))
         .collect::<BTreeSet<String>>()
 }
 
 fn non_rust_changed_files(paths: &[PathBuf]) -> Vec<String> {
-    paths.iter()
+    paths
+        .iter()
         .filter(|path| rust_module_label(path).is_none())
         .map(|path| path.display().to_string())
         .collect::<BTreeSet<String>>()
@@ -739,7 +838,10 @@ fn mermaid_class_for_module(details: &ModuleDetails) -> &'static str {
     }
 }
 
-fn module_file_map(current_paths: &[PathBuf], previous_paths: &[PathBuf]) -> BTreeMap<String, Vec<String>> {
+fn module_file_map(
+    current_paths: &[PathBuf],
+    previous_paths: &[PathBuf],
+) -> BTreeMap<String, Vec<String>> {
     let mut files = BTreeSet::new();
 
     for path in current_paths.iter().chain(previous_paths.iter()) {
@@ -757,6 +859,201 @@ fn module_file_map(current_paths: &[PathBuf], previous_paths: &[PathBuf]) -> BTr
     }
 
     by_module
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct DependencyEdge {
+    from: String,
+    to: String,
+}
+
+fn dependency_edges(paths: &[PathBuf], files: &[(PathBuf, String)]) -> BTreeSet<DependencyEdge> {
+    let modules = module_labels_from_paths(paths);
+    let file_by_path = files
+        .iter()
+        .map(|(path, content)| (path.clone(), content.as_str()))
+        .collect::<BTreeMap<PathBuf, &str>>();
+    let mut edges = BTreeSet::new();
+
+    for path in paths {
+        let Some(from_module) = rust_module_label(path) else {
+            continue;
+        };
+        let Some(content) = file_by_path.get(path) else {
+            continue;
+        };
+        for used_path in parse_use_paths(content) {
+            if let Some(to_module) = resolve_module_dependency(&from_module, &used_path, &modules) {
+                if to_module != from_module {
+                    edges.insert(DependencyEdge {
+                        from: from_module.clone(),
+                        to: to_module,
+                    });
+                }
+            }
+        }
+    }
+
+    edges
+}
+
+fn parse_use_paths(content: &str) -> BTreeSet<String> {
+    let mut paths = BTreeSet::new();
+    for statement in extract_use_statements(content) {
+        let normalized = statement.trim().trim_end_matches(';').trim();
+        if normalized.is_empty() {
+            continue;
+        }
+        let without_visibility = normalized
+            .strip_prefix("pub ")
+            .or_else(|| normalized.strip_prefix("pub(crate) "))
+            .or_else(|| normalized.strip_prefix("pub(super) "))
+            .or_else(|| normalized.strip_prefix("pub(self) "))
+            .unwrap_or(normalized);
+        let Some(use_clause) = without_visibility.strip_prefix("use ") else {
+            continue;
+        };
+        collect_use_targets(use_clause, String::new(), &mut paths);
+    }
+    paths
+}
+
+fn extract_use_statements(content: &str) -> Vec<String> {
+    content
+        .lines()
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            if trimmed.starts_with("use ") || trimmed.starts_with("pub use ") {
+                Some(trimmed.to_string())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn collect_use_targets(clause: &str, prefix: String, out: &mut BTreeSet<String>) {
+    let clause = clause.trim();
+    if clause.is_empty() {
+        return;
+    }
+    if let Some(open_index) = clause.find('{') {
+        let base = clause[..open_index]
+            .trim()
+            .trim_end_matches("::")
+            .to_string();
+        let merged_prefix = join_use_path(&prefix, &base);
+        let Some(close_index) = clause.rfind('}') else {
+            return;
+        };
+        let inner = &clause[open_index + 1..close_index];
+        for part in split_top_level(inner) {
+            collect_use_targets(part, merged_prefix.clone(), out);
+        }
+        return;
+    }
+
+    for part in split_top_level(clause) {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        let part = part.split(" as ").next().unwrap_or(part).trim();
+        if part == "self" {
+            out.insert(prefix.clone());
+            continue;
+        }
+        let merged = join_use_path(&prefix, part);
+        out.insert(merged.trim_end_matches("::*").to_string());
+    }
+}
+
+fn join_use_path(prefix: &str, value: &str) -> String {
+    if prefix.is_empty() {
+        return value.trim().to_string();
+    }
+    if value.is_empty() {
+        return prefix.to_string();
+    }
+    format!("{}::{}", prefix.trim_end_matches("::"), value)
+}
+
+fn split_top_level(value: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0usize;
+    for (index, ch) in value.char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                parts.push(value[start..index].trim());
+                start = index + ch.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    parts.push(value[start..].trim());
+    parts
+}
+
+fn resolve_module_dependency(
+    from_module: &str,
+    used_path: &str,
+    known_modules: &BTreeSet<String>,
+) -> Option<String> {
+    let canonical = canonicalize_use_path(from_module, used_path)?;
+    find_best_matching_module(&canonical, known_modules)
+}
+
+fn canonicalize_use_path(from_module: &str, used_path: &str) -> Option<String> {
+    if used_path.is_empty() {
+        return None;
+    }
+    let namespace_root = module_namespace_root(from_module)?;
+    if let Some(suffix) = used_path.strip_prefix("crate::") {
+        return Some(format!("{namespace_root}::{suffix}"));
+    }
+    if let Some(suffix) = used_path.strip_prefix("self::") {
+        return Some(format!("{from_module}::{suffix}"));
+    }
+    if used_path == "self" {
+        return Some(from_module.to_string());
+    }
+    if used_path.starts_with("super::super::") {
+        let mut current = from_module.to_string();
+        let mut remainder = used_path;
+        while let Some(next) = remainder.strip_prefix("super::") {
+            current = parent_module(&current)?;
+            remainder = next;
+        }
+        return Some(format!("{current}::{remainder}"));
+    }
+    if let Some(suffix) = used_path.strip_prefix("super::") {
+        let parent = parent_module(from_module)?;
+        return Some(format!("{parent}::{suffix}"));
+    }
+    None
+}
+
+fn module_namespace_root(module: &str) -> Option<String> {
+    let mut parts = module.split("::");
+    let first = parts.next()?;
+    let second = parts.next()?;
+    Some(format!("{first}::{second}"))
+}
+
+fn find_best_matching_module(path: &str, known_modules: &BTreeSet<String>) -> Option<String> {
+    let mut candidate = path.to_string();
+    loop {
+        if known_modules.contains(&candidate) {
+            return Some(candidate);
+        }
+        let Some(parent) = parent_module(&candidate) else {
+            return None;
+        };
+        candidate = parent;
+    }
 }
 
 fn escape_mermaid_label(value: &str) -> String {
