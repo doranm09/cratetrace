@@ -1,0 +1,80 @@
+{
+  "name": "cratetrace",
+  "displayName": "Cratetrace",
+  "description": "Generate and navigate commit-oriented Rust history graphs via the cratetrace CLI.",
+  "version": "0.0.1",
+  "publisher": "local",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "extensionKind": [
+    "workspace"
+  ],
+  "categories": [
+    "Visualization",
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:cratetrace.generateHistoryGraphs",
+    "onCommand:cratetrace.openArtifactsIndex",
+    "onCommand:cratetrace.openRollupGraph",
+    "onCommand:cratetrace.pickCommitGraph",
+    "onCommand:cratetrace.nextCommitGraph",
+    "onCommand:cratetrace.previousCommitGraph"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "cratetrace.generateHistoryGraphs",
+        "title": "Cratetrace: Generate History Graphs"
+      },
+      {
+        "command": "cratetrace.openArtifactsIndex",
+        "title": "Cratetrace: Open Artifacts Index"
+      },
+      {
+        "command": "cratetrace.openRollupGraph",
+        "title": "Cratetrace: Open Roll-Up Graph"
+      },
+      {
+        "command": "cratetrace.pickCommitGraph",
+        "title": "Cratetrace: Pick Commit Graph"
+      },
+      {
+        "command": "cratetrace.nextCommitGraph",
+        "title": "Cratetrace: Next Commit Graph"
+      },
+      {
+        "command": "cratetrace.previousCommitGraph",
+        "title": "Cratetrace: Previous Commit Graph"
+      }
+    ],
+    "configuration": {
+      "title": "Cratetrace",
+      "properties": {
+        "cratetrace.cliPath": {
+          "type": "string",
+          "default": "",
+          "description": "Optional path to a cratetrace CLI binary. Relative paths are resolved from the workspace root."
+        },
+        "cratetrace.defaultRange": {
+          "type": "string",
+          "default": "HEAD~9..HEAD",
+          "description": "Default Git revision range used when generating graphs."
+        },
+        "cratetrace.recentCommitLimit": {
+          "type": "number",
+          "default": 50,
+          "minimum": 1,
+          "description": "How many recent commits to show when picking commits from a list."
+        },
+        "cratetrace.outputDirectory": {
+          "type": "string",
+          "default": ".cratetrace",
+          "description": "Directory where cratetrace writes artifacts. Relative paths are resolved from the workspace root."
+        }
+      }
+    }
+  }
+}

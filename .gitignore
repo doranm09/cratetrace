@@ -1,0 +1,7 @@
+/target/
+/.cratetrace/
+/artifacts/
+.vscode-test/
+*.vsix
+node_modules/
+.codex
