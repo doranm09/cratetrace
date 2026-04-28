@@ -17,7 +17,7 @@ The current implementation keeps the system stable and cheap to iterate on.
 2. `cratetrace-core` calls Git to enumerate commits in chronological order.
 3. For each commit, `cratetrace-core` collects the changed paths and lists the repository snapshot at that commit.
 4. Rust paths are mapped to approximate module labels for both the current commit and its parent.
-5. A whole-project UML-style module graph is emitted for the commit.
+5. A whole-project UML-style module graph is emitted for the commit in DOT and Mermaid form.
 6. Added, modified, and removed modules are highlighted inside that full graph.
 7. A range-level roll-up graph is emitted from the baseline and final snapshots.
 8. If `dot` is available, SVG files are rendered from the DOT files.
@@ -41,9 +41,9 @@ This is enough to answer whole-project structural questions per commit, but it d
 
 The VS Code extension should stay thin:
 
-- prompt for a revision range
+- prompt for a commit span or revision range
 - launch the CLI
 - show progress and command output
-- open the generated artifact index
+- render Mermaid or open the selected generated artifact
 
 All repository analysis stays in the standalone CLI so the same workflow can run in CI, from the terminal, or in another editor.

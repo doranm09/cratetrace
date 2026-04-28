@@ -3,6 +3,7 @@
 This extension is a thin command surface over the `cratetrace-cli` binary.
 
 The CLI currently generates whole-project UML-style module graphs for each commit in a revision range and highlights added, modified, and removed modules.
+The VS Code extension renders Mermaid graphs in a built-in webview by default and can also open SVG or DOT artifacts.
 
 ## Commands
 
@@ -16,10 +17,15 @@ The CLI currently generates whole-project UML-style module graphs for each commi
 The usual flow is:
 
 1. Run `Cratetrace: Generate History Graphs`
-2. Choose either a recent-commit picker or a manual Git revision range
+2. Choose either a recent commit picker or a manual Git revision range
 3. Open the roll-up graph
 4. Step through the commit snapshots with `Next Commit Graph` and `Previous Commit Graph`
 5. Jump directly to a specific commit snapshot with `Pick Commit Graph`
+
+When you use the recent commit picker, select:
+
+- one commit to compare it against its parent
+- two commits to compare the span between them
 
 ## CLI resolution
 
@@ -53,6 +59,16 @@ During local development, set the CLI path in VS Code settings:
 
 Relative `cratetrace.cliPath` values are resolved from the workspace root.
 
+The preview format is controlled by:
+
+```json
+{
+  "cratetrace.previewFormat": "mermaid"
+}
+```
+
+Available values are `mermaid`, `svg`, `dot`, and `auto`.
+
 The recent commit picker size is controlled by:
 
 ```json
@@ -63,7 +79,8 @@ The recent commit picker size is controlled by:
 
 ## Graphviz
 
-If Graphviz `dot` is installed, `cratetrace` renders SVG files and the extension opens graphical previews.
-If `dot` is missing, the extension falls back to DOT source files and warns that graphical SVG output is unavailable.
+Mermaid previews are always generated and rendered inside the extension webview.
+If Graphviz `dot` is installed, `cratetrace` also renders SVG files.
+If `dot` is missing and the preferred preview format is `svg`, the extension falls back to Mermaid or DOT.
 
 The extension intentionally keeps all repository analysis in the standalone CLI so the same workflow can run from terminals and CI.

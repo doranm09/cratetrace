@@ -88,6 +88,6 @@ fn required_value(args: &[String], index: usize, flag: &str) -> Result<String> {
 
 fn print_usage() {
     println!(
-        "cratetrace-cli\n\nCommands:\n  trace   Generate whole-project commit UML-style DOT/SVG artifacts\n\nUsage:\n  cratetrace-cli trace [--repo PATH] [--range REV_RANGE] [--out PATH] [--no-svg]"
+        "cratetrace-cli\n\nCommands:\n  trace   Generate whole-project commit UML-style DOT/SVG/Mermaid artifacts\n\nUsage:\n  cratetrace-cli trace [--repo PATH] [--range REV_RANGE] [--out PATH] [--no-svg]"
     );
 }

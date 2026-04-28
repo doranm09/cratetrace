@@ -5,6 +5,7 @@ const vscode = require("vscode");
 
 const OPEN_SETTINGS_ACTION = "Open Settings";
 const FIELD_SEPARATOR = "\u001f";
+const PREVIEW_FORMATS = new Set(["auto", "dot", "mermaid", "svg"]);
 
 const navigationState = {
   artifactRoot: null,
@@ -13,8 +14,11 @@ const navigationState = {
   currentCommitIndex: -1,
   currentKind: null
 };
+let extensionContext = null;
+let mermaidPreviewPanel = null;
 
 function activate(context) {
+  extensionContext = context;
   const output = vscode.window.createOutputChannel("Cratetrace");
 
   context.subscriptions.push(
@@ -60,9 +64,9 @@ function activate(context) {
         if (!openedRollup) {
           await openIfExists(path.join(artifactRoot, "index.md"));
         }
-        if (!hasSvgArtifacts(navigationState)) {
+        if (preferredPreviewFormat(folder) === "svg" && !hasSvgArtifacts(navigationState)) {
           vscode.window.showWarningMessage(
-            "Graphviz `dot` was not found. Cratetrace generated DOT files but not SVG graphs. Install Graphviz for graphical previews."
+            "Graphviz `dot` was not found. Cratetrace generated Mermaid and DOT artifacts, but not SVG graphs."
           );
         }
         vscode.window.showInformationMessage(
@@ -212,8 +216,8 @@ async function promptTraceSelection(folder, config) {
   const mode = await vscode.window.showQuickPick(
     [
       {
-        label: "Select Recent Commits",
-        description: "Pick commits from a recent history list",
+        label: "Select Comparison Commits",
+        description: "Pick one or two commits from recent history",
         mode: "recent"
       },
       {
@@ -272,43 +276,45 @@ async function promptRecentCommitRange(folder, config) {
     return null;
   }
 
-  const newestSelection = await vscode.window.showQuickPick(
-    commits.map((commit, index) => toCommitQuickPick(commit, index, commits.length)),
-    {
-      title: "Select newest commit to include",
-      matchOnDescription: true,
-      matchOnDetail: true,
-      ignoreFocusOut: true
-    }
-  );
-  if (!newestSelection) {
-    return null;
-  }
+  while (true) {
+    const selections = await vscode.window.showQuickPick(
+      commits.map((commit, index) => toCommitQuickPick(commit, index, commits.length)),
+      {
+        canPickMany: true,
+        title: "Select one commit or two commits to compare",
+        placeHolder:
+          "Pick one commit to compare against its parent, or two commits to compare a span.",
+        matchOnDescription: true,
+        matchOnDetail: true,
+        ignoreFocusOut: true
+      }
+    );
 
-  const oldestSelection = await vscode.window.showQuickPick(
-    commits
-      .slice(newestSelection.index)
-      .map((commit, offset) =>
-        toCommitQuickPick(commit, newestSelection.index + offset, commits.length)
-      ),
-    {
-      title: "Select oldest commit to include",
-      matchOnDescription: true,
-      matchOnDetail: true,
-      ignoreFocusOut: true
+    if (!selections || selections.length === 0) {
+      return null;
     }
-  );
-  if (!oldestSelection) {
-    return null;
-  }
 
-  return {
-    revisionRange: revisionRangeForCommits(
-      oldestSelection.commit,
-      newestSelection.commit
-    ),
-    summary: `recent commits ${oldestSelection.commit.shortSha}..${newestSelection.commit.shortSha}`
-  };
+    if (selections.length > 2) {
+      vscode.window.showWarningMessage("Select at most two commits.");
+      continue;
+    }
+
+    const sortedSelections = [...selections].sort((left, right) => left.index - right.index);
+    if (sortedSelections.length === 1) {
+      const commit = sortedSelections[0].commit;
+      return {
+        revisionRange: revisionRangeForCommits(commit, commit),
+        summary: `commit ${commit.shortSha} against its parent`
+      };
+    }
+
+    const newestCommit = sortedSelections[0].commit;
+    const oldestCommit = sortedSelections[1].commit;
+    return {
+      revisionRange: revisionRangeForCommits(oldestCommit, newestCommit),
+      summary: `compare ${oldestCommit.shortSha}..${newestCommit.shortSha}`
+    };
+  }
 }
 
 function toCommitQuickPick(commit, index, total) {
@@ -380,6 +386,30 @@ function describeCliSource(source) {
   }
 }
 
+function resolveArtifactPath(artifactRoot, relativePath) {
+  return relativePath && relativePath.length > 0
+    ? path.join(artifactRoot, relativePath)
+    : null;
+}
+
+function preferredPreviewFormat(folder) {
+  const config = vscode.workspace.getConfiguration("cratetrace", folder.uri);
+  const configuredFormat = String(config.get("previewFormat", "mermaid")).trim();
+  return PREVIEW_FORMATS.has(configuredFormat) ? configuredFormat : "mermaid";
+}
+
+function preferredArtifactPath(item, previewFormat) {
+  const candidatesByFormat = {
+    auto: [item.mermaidPath, item.svgPath, item.dotPath],
+    dot: [item.dotPath, item.mermaidPath, item.svgPath],
+    mermaid: [item.mermaidPath, item.svgPath, item.dotPath],
+    svg: [item.svgPath, item.mermaidPath, item.dotPath]
+  };
+
+  const candidates = candidatesByFormat[previewFormat] || candidatesByFormat.mermaid;
+  return candidates.find((candidate) => candidate && fs.existsSync(candidate)) || null;
+}
+
 async function listRecentCommits(repoRoot, limit) {
   const output = await captureProcessOutput(
     "git",
@@ -446,12 +476,32 @@ function loadTimelineState(artifactRoot) {
     .slice(1)
     .filter((line) => line.trim().length > 0)
     .map((line) => {
-      const [kind, relPath, label] = line.split("\t");
-      return {
-        kind,
-        label,
-        filePath: path.join(artifactRoot, relPath)
-      };
+      const parts = line.split("\t");
+      if (parts.length === 5) {
+        const [kind, dotRelPath, svgRelPath, mermaidRelPath, label] = parts;
+        return {
+          kind,
+          label,
+          dotPath: resolveArtifactPath(artifactRoot, dotRelPath),
+          svgPath: resolveArtifactPath(artifactRoot, svgRelPath),
+          mermaidPath: resolveArtifactPath(artifactRoot, mermaidRelPath)
+        };
+      }
+
+      if (parts.length === 3) {
+        const [kind, relPath, label] = parts;
+        const filePath = resolveArtifactPath(artifactRoot, relPath);
+        return {
+          kind,
+          label,
+          dotPath: filePath && path.extname(filePath).toLowerCase() === ".dot" ? filePath : null,
+          svgPath: filePath && path.extname(filePath).toLowerCase() === ".svg" ? filePath : null,
+          mermaidPath:
+            filePath && path.extname(filePath).toLowerCase() === ".mmd" ? filePath : null
+        };
+      }
+
+      throw new Error(`unexpected timeline row: ${line}`);
     });
 
   navigationState.artifactRoot = artifactRoot;
@@ -462,7 +512,7 @@ function loadTimelineState(artifactRoot) {
 }
 
 function hasSvgArtifacts(state) {
-  return state.items.some((item) => path.extname(item.filePath).toLowerCase() === ".svg");
+  return state.items.some((item) => item.svgPath && fs.existsSync(item.svgPath));
 }
 
 async function openRollupFromState() {
@@ -488,16 +538,291 @@ async function openCommitAtIndex(index) {
 }
 
 async function openArtifactItem(item) {
-  const uri = vscode.Uri.file(item.filePath);
-  await vscode.commands.executeCommand("vscode.open", uri);
+  const folder = pickWorkspaceFolder();
+  if (!folder) {
+    return false;
+  }
+
+  const previewFormat = preferredPreviewFormat(folder);
+  const artifactPath = preferredArtifactPath(item, previewFormat);
+  if (!artifactPath) {
+    vscode.window.showWarningMessage(
+      `No Cratetrace artifact is available for ${item.label}.`
+    );
+    return false;
+  }
+
+  if (path.extname(artifactPath).toLowerCase() === ".mmd") {
+    await showMermaidArtifact(item, artifactPath);
+  } else {
+    const uri = vscode.Uri.file(artifactPath);
+    await vscode.commands.executeCommand("vscode.open", uri);
+  }
+
   if (item.kind === "commit") {
     navigationState.currentCommitIndex = navigationState.commitItems.findIndex(
-      (candidate) => candidate.filePath === item.filePath
+      (candidate) => candidate === item
     );
   } else {
     navigationState.currentCommitIndex = -1;
   }
   navigationState.currentKind = item.kind;
+}
+
+async function showMermaidArtifact(item, filePath) {
+  if (!extensionContext) {
+    throw new Error("extension context is unavailable");
+  }
+
+  const mermaidScriptPath = vscode.Uri.joinPath(
+    extensionContext.extensionUri,
+    "media",
+    "mermaid.min.js"
+  );
+  if (!fs.existsSync(mermaidScriptPath.fsPath)) {
+    throw new Error(
+      "Mermaid renderer is missing from the extension package. Reinstall the extension."
+    );
+  }
+
+  const mermaidSource = fs.readFileSync(filePath, "utf8");
+  const panel =
+    mermaidPreviewPanel ||
+    vscode.window.createWebviewPanel(
+      "cratetraceMermaid",
+      item.label,
+      vscode.ViewColumn.Active,
+      {
+        enableScripts: true,
+        localResourceRoots: [vscode.Uri.joinPath(extensionContext.extensionUri, "media")],
+        retainContextWhenHidden: true
+      }
+    );
+
+  if (!mermaidPreviewPanel) {
+    mermaidPreviewPanel = panel;
+    panel.onDidDispose(() => {
+      if (mermaidPreviewPanel === panel) {
+        mermaidPreviewPanel = null;
+      }
+    });
+  }
+
+  panel.title = item.label;
+  panel.webview.html = renderMermaidWebview(
+    panel.webview,
+    panel.title,
+    filePath,
+    mermaidSource,
+    mermaidScriptPath
+  );
+  panel.reveal(vscode.ViewColumn.Active, false);
+}
+
+function renderMermaidWebview(webview, title, filePath, mermaidSource, mermaidScriptPath) {
+  const nonce = createNonce();
+  const mermaidScriptUri = webview.asWebviewUri(mermaidScriptPath);
+  const escapedTitle = escapeHtml(title);
+  const escapedPath = escapeHtml(filePath);
+  const escapedSource = escapeHtml(mermaidSource);
+
+  return `<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; img-src ${webview.cspSource} https:; script-src 'nonce-${nonce}' ${webview.cspSource}; style-src 'nonce-${nonce}';"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>${escapedTitle}</title>
+    <style nonce="${nonce}">
+      :root {
+        color-scheme: light dark;
+      }
+
+      body {
+        margin: 0;
+        padding: 24px;
+        background:
+          radial-gradient(circle at top left, rgba(14, 116, 144, 0.18), transparent 32%),
+          radial-gradient(circle at bottom right, rgba(217, 119, 6, 0.16), transparent 28%),
+          var(--vscode-editor-background);
+        color: var(--vscode-editor-foreground);
+        font-family: var(--vscode-font-family);
+      }
+
+      .frame {
+        display: grid;
+        gap: 16px;
+      }
+
+      .header {
+        display: grid;
+        gap: 8px;
+        padding: 16px 18px;
+        border: 1px solid var(--vscode-panel-border);
+        border-radius: 16px;
+        background: color-mix(in srgb, var(--vscode-editor-background) 82%, white 18%);
+        box-shadow: 0 18px 48px rgba(15, 23, 42, 0.12);
+      }
+
+      .title {
+        font-size: 1.1rem;
+        font-weight: 700;
+      }
+
+      .meta {
+        font-size: 0.9rem;
+        opacity: 0.82;
+        word-break: break-all;
+      }
+
+      .legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .chip {
+        padding: 4px 10px;
+        border-radius: 999px;
+        border: 1px solid transparent;
+        font-size: 0.82rem;
+        letter-spacing: 0.01em;
+      }
+
+      .chip.added {
+        background: rgba(34, 197, 94, 0.16);
+        border-color: rgba(21, 128, 61, 0.45);
+      }
+
+      .chip.modified {
+        background: rgba(245, 158, 11, 0.18);
+        border-color: rgba(180, 83, 9, 0.45);
+      }
+
+      .chip.removed {
+        background: rgba(239, 68, 68, 0.14);
+        border-color: rgba(185, 28, 28, 0.38);
+      }
+
+      .chip.unchanged {
+        background: rgba(59, 130, 246, 0.12);
+        border-color: rgba(71, 85, 105, 0.35);
+      }
+
+      .panel {
+        border: 1px solid var(--vscode-panel-border);
+        border-radius: 20px;
+        padding: 14px;
+        background: color-mix(in srgb, var(--vscode-editor-background) 86%, white 14%);
+        overflow: auto;
+      }
+
+      .diagram-shell {
+        min-height: 320px;
+      }
+
+      .error {
+        display: none;
+        padding: 12px 14px;
+        border-radius: 12px;
+        border: 1px solid rgba(185, 28, 28, 0.45);
+        background: rgba(127, 29, 29, 0.14);
+        color: var(--vscode-errorForeground);
+        white-space: pre-wrap;
+      }
+
+      details {
+        border: 1px solid var(--vscode-panel-border);
+        border-radius: 14px;
+        padding: 12px 14px;
+        background: color-mix(in srgb, var(--vscode-editor-background) 92%, white 8%);
+      }
+
+      summary {
+        cursor: pointer;
+        font-weight: 600;
+      }
+
+      pre.source {
+        margin: 12px 0 0;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font-family: var(--vscode-editor-font-family);
+        font-size: var(--vscode-editor-font-size);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="frame">
+      <section class="header">
+        <div class="title">${escapedTitle}</div>
+        <div class="meta">${escapedPath}</div>
+        <div class="legend">
+          <span class="chip added">Added</span>
+          <span class="chip modified">Modified</span>
+          <span class="chip removed">Removed</span>
+          <span class="chip unchanged">Unchanged</span>
+        </div>
+      </section>
+      <section class="panel">
+        <div id="render-error" class="error"></div>
+        <div class="diagram-shell">
+          <pre class="mermaid">${escapedSource}</pre>
+        </div>
+      </section>
+      <details>
+        <summary>Mermaid Source</summary>
+        <pre class="source">${escapedSource}</pre>
+      </details>
+    </div>
+    <script nonce="${nonce}" src="${mermaidScriptUri}"></script>
+    <script nonce="${nonce}">
+      const errorNode = document.getElementById("render-error");
+      const mermaidTheme = document.body.classList.contains("vscode-dark") ? "dark" : "default";
+
+      mermaid.initialize({
+        startOnLoad: false,
+        theme: mermaidTheme,
+        securityLevel: "loose",
+        flowchart: {
+          htmlLabels: true,
+          useMaxWidth: true,
+          curve: "basis"
+        }
+      });
+
+      mermaid
+        .run({
+          nodes: Array.from(document.querySelectorAll(".mermaid"))
+        })
+        .catch((error) => {
+          errorNode.style.display = "block";
+          errorNode.textContent = String(error);
+        });
+    </script>
+  </body>
+</html>`;
+}
+
+function createNonce() {
+  const alphabet =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  let nonce = "";
+  for (let index = 0; index < 32; index += 1) {
+    nonce += alphabet[Math.floor(Math.random() * alphabet.length)];
+  }
+  return nonce;
+}
+
+function escapeHtml(value) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;");
 }
 
 function runCratetrace(command, args, cwd, output) {

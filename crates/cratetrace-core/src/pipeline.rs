@@ -33,9 +33,11 @@ pub fn trace_history(options: &TraceOptions) -> Result<TraceReport> {
     };
     let final_paths = git::list_paths_at_commit(&options.repo_root, &last_commit.sha)?;
     let rollup_render =
-        graph::render_range_rollup_dot(&options.revision_range, &commits, &final_paths, &baseline_paths);
+        graph::render_range_rollup_graph(&options.revision_range, &commits, &final_paths, &baseline_paths);
     let rollup_dot_path = options.output_dir.join("rollup.dot");
     fs::write(&rollup_dot_path, rollup_render.dot)?;
+    let rollup_mermaid_path = options.output_dir.join("rollup.mmd");
+    fs::write(&rollup_mermaid_path, rollup_render.mermaid)?;
     let rollup_svg_path = if options.render_svg {
         render_svg(&rollup_dot_path)?
     } else {
@@ -46,6 +48,7 @@ pub fn trace_history(options: &TraceOptions) -> Result<TraceReport> {
         commit_count: commits.len(),
         dot_path: rollup_dot_path,
         svg_path: rollup_svg_path,
+        mermaid_path: rollup_mermaid_path,
         total_modules: rollup_render.total_modules,
         added_modules: rollup_render.added_modules,
         modified_modules: rollup_render.modified_modules,
@@ -59,9 +62,11 @@ pub fn trace_history(options: &TraceOptions) -> Result<TraceReport> {
             Some(parent_sha) => git::list_paths_at_commit(&options.repo_root, parent_sha)?,
             None => Vec::new(),
         };
-        let rendered = graph::render_commit_dot(&commit, &current_paths, &previous_paths);
+        let rendered = graph::render_commit_graph(&commit, &current_paths, &previous_paths);
         let dot_path = commit_dir.join(format!("{}.dot", commit.short_sha));
         fs::write(&dot_path, rendered.dot)?;
+        let mermaid_path = commit_dir.join(format!("{}.mmd", commit.short_sha));
+        fs::write(&mermaid_path, rendered.mermaid)?;
 
         let svg_path = if options.render_svg {
             render_svg(&dot_path)?
@@ -73,6 +78,7 @@ pub fn trace_history(options: &TraceOptions) -> Result<TraceReport> {
             commit,
             dot_path,
             svg_path,
+            mermaid_path,
             total_modules: rendered.total_modules,
             added_modules: rendered.added_modules,
             modified_modules: rendered.modified_modules,
@@ -147,6 +153,10 @@ fn render_index(report: &TraceReport, output_dir: &Path) -> String {
         "- DOT: `{}`\n",
         relative_display(&report.rollup.dot_path, output_dir)
     ));
+    out.push_str(&format!(
+        "- Mermaid: `{}`\n",
+        relative_display(&report.rollup.mermaid_path, output_dir)
+    ));
     match &report.rollup.svg_path {
         Some(svg_path) => out.push_str(&format!(
             "- SVG: `{}`\n\n",
@@ -176,6 +186,10 @@ fn render_index(report: &TraceReport, output_dir: &Path) -> String {
             "- DOT: `{}`\n",
             relative_display(&artifact.dot_path, output_dir)
         ));
+        out.push_str(&format!(
+            "- Mermaid: `{}`\n",
+            relative_display(&artifact.mermaid_path, output_dir)
+        ));
         match &artifact.svg_path {
             Some(svg_path) => out.push_str(&format!(
                 "- SVG: `{}`\n",
@@ -193,10 +207,12 @@ fn render_index(report: &TraceReport, output_dir: &Path) -> String {
 }
 
 fn render_timeline(report: &TraceReport, output_dir: &Path) -> String {
-    let mut out = String::from("kind\trel_path\tlabel\n");
+    let mut out = String::from("kind\tdot_rel_path\tsvg_rel_path\tmermaid_rel_path\tlabel\n");
     out.push_str(&format!(
-        "rollup\t{}\t{}\n",
-        preview_relative_path(&report.rollup.svg_path, &report.rollup.dot_path, output_dir),
+        "rollup\t{}\t{}\t{}\t{}\n",
+        relative_display(&report.rollup.dot_path, output_dir),
+        optional_relative_display(&report.rollup.svg_path, output_dir),
+        relative_display(&report.rollup.mermaid_path, output_dir),
         sanitize_manifest_field(&format!(
             "Range roll-up {}",
             report.rollup.revision_range
@@ -205,8 +221,10 @@ fn render_timeline(report: &TraceReport, output_dir: &Path) -> String {
 
     for artifact in &report.commits {
         out.push_str(&format!(
-            "commit\t{}\t{}\n",
-            preview_relative_path(&artifact.svg_path, &artifact.dot_path, output_dir),
+            "commit\t{}\t{}\t{}\t{}\n",
+            relative_display(&artifact.dot_path, output_dir),
+            optional_relative_display(&artifact.svg_path, output_dir),
+            relative_display(&artifact.mermaid_path, output_dir),
             sanitize_manifest_field(&format!(
                 "{} {}",
                 artifact.commit.short_sha, artifact.commit.subject
@@ -224,10 +242,10 @@ fn relative_display(path: &Path, base: &Path) -> String {
         .to_string()
 }
 
-fn preview_relative_path(svg_path: &Option<PathBuf>, dot_path: &Path, base: &Path) -> String {
-    match svg_path {
-        Some(svg_path) => relative_display(svg_path, base),
-        None => relative_display(dot_path, base),
+fn optional_relative_display(path: &Option<PathBuf>, base: &Path) -> String {
+    match path {
+        Some(path) => relative_display(path, base),
+        None => String::new(),
     }
 }
 

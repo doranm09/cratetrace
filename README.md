@@ -5,8 +5,8 @@
 The project is split into three layers:
 
 - `crates/cratetrace-core`: shared Git/history/graph generation logic
-- `crates/cratetrace-cli`: a standalone CLI that generates per-commit whole-project DOT and SVG artifacts
-- `extensions/vscode`: a thin VS Code extension that shells out to the CLI and opens the generated index
+- `crates/cratetrace-cli`: a standalone CLI that generates per-commit whole-project DOT, SVG, and Mermaid artifacts
+- `extensions/vscode`: a thin VS Code extension that shells out to the CLI and previews the generated artifacts
 
 ## Current scope
 
@@ -18,9 +18,10 @@ The current implementation focuses on a stable commit-to-artifact pipeline:
 4. infer module/package labels from repository paths
 5. render the full project module graph for each commit
 6. highlight added, modified, and removed modules inside that full graph
-7. optionally render SVG with `dot`
-8. generate a top-level range roll-up graph
-9. build an `index.md` artifact catalog and `timeline.tsv` navigation manifest
+7. emit Mermaid graph artifacts for webview rendering inside VS Code
+8. optionally render SVG with `dot`
+9. generate a top-level range roll-up graph
+10. build an `index.md` artifact catalog and `timeline.tsv` navigation manifest
 
 This is still intentionally narrower than a full semantic dependency engine. The next phase is to replace path-based module inference with Rust-aware dependency extraction and real inter-module dependency edges.
 
@@ -43,12 +44,12 @@ cargo run -p cratetrace-cli -- trace \
 
 If Graphviz is installed, `cratetrace` will also render SVG alongside each DOT file.
 
-The DOT/SVG output is currently UML-style package/module structure rather than full class UML. Each commit artifact shows the entire project snapshot and colors the delta for that commit.
+The DOT/SVG/Mermaid output is currently UML-style package/module structure rather than full class UML. Each commit artifact shows the entire project snapshot and colors the delta for that commit.
 
 The artifact root contains:
 
-- `rollup.dot` and `rollup.svg`: aggregate view across the selected revision range
-- `commits/*.dot` and `commits/*.svg`: one whole-project graph per commit
+- `rollup.dot`, `rollup.svg`, and `rollup.mmd`: aggregate view across the selected revision range
+- `commits/*.dot`, `commits/*.svg`, and `commits/*.mmd`: one whole-project graph per commit
 - `index.md`: human-readable summary
 - `timeline.tsv`: extension-friendly navigation manifest
 
@@ -67,8 +68,10 @@ It exposes these commands:
 
 `Cratetrace: Generate History Graphs` now supports either:
 
-- picking commits from a recent history list in VS Code
+- picking one or two commits from a recent history list in VS Code
 - entering a manual Git revision range
+
+The extension renders Mermaid by default in a built-in webview, and can also open SVG or DOT artifacts via the `cratetrace.previewFormat` setting.
 
 The extension resolves the CLI in this order:
 
@@ -82,7 +85,7 @@ During development, point the extension at the local CLI binary using the `crate
 
 - `/home/michaeldoran/git/cratetrace/target/debug/cratetrace-cli`
 
-If Graphviz `dot` is installed, the extension opens SVG graphs. Otherwise it falls back to DOT source and warns that graphical previews are unavailable.
+Mermaid previews do not require Graphviz. If you switch the preferred preview format to `svg`, the extension will fall back to Mermaid or DOT when `dot` output is unavailable.
 
 ## Planned next steps
 

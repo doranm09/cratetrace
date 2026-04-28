@@ -63,6 +63,17 @@
           "default": "HEAD~9..HEAD",
           "description": "Default Git revision range used when generating graphs."
         },
+        "cratetrace.previewFormat": {
+          "type": "string",
+          "default": "mermaid",
+          "enum": [
+            "mermaid",
+            "svg",
+            "dot",
+            "auto"
+          ],
+          "markdownDescription": "Preferred artifact preview format. `mermaid` renders an interactive webview without requiring Graphviz, `svg` opens Graphviz output when available, `dot` opens source, and `auto` prefers Mermaid then SVG then DOT."
+        },
         "cratetrace.recentCommitLimit": {
           "type": "number",
           "default": 50,

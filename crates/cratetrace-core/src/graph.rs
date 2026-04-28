@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use crate::model::CommitRecord;
@@ -6,13 +6,14 @@ use crate::model::CommitRecord;
 #[derive(Debug, Clone)]
 pub struct GraphRender {
     pub dot: String,
+    pub mermaid: String,
     pub total_modules: usize,
     pub added_modules: usize,
     pub modified_modules: usize,
     pub removed_modules: usize,
 }
 
-pub fn render_commit_dot(
+pub fn render_commit_graph(
     commit: &CommitRecord,
     current_paths: &[PathBuf],
     previous_paths: &[PathBuf],
@@ -33,6 +34,9 @@ pub fn render_commit_dot(
             commit.subject.clone(),
             commit.committed_at.clone(),
         ],
+        current_paths,
+        previous_paths,
+        &commit.changed_paths,
         &current_modules,
         &previous_modules,
         &modified_modules,
@@ -40,7 +44,7 @@ pub fn render_commit_dot(
     )
 }
 
-pub fn render_range_rollup_dot(
+pub fn render_range_rollup_graph(
     revision_range: &str,
     commits: &[CommitRecord],
     final_paths: &[PathBuf],
@@ -81,6 +85,9 @@ pub fn render_range_rollup_dot(
 
     render_project_diff_graph(
         &header_lines,
+        final_paths,
+        baseline_paths,
+        &touched_paths,
         &current_modules,
         &previous_modules,
         &modified_modules,
@@ -90,6 +97,9 @@ pub fn render_range_rollup_dot(
 
 fn render_project_diff_graph(
     header_lines: &[String],
+    current_paths: &[PathBuf],
+    previous_paths: &[PathBuf],
+    changed_paths: &[PathBuf],
     current_modules: &BTreeSet<String>,
     previous_modules: &BTreeSet<String>,
     modified_modules: &BTreeSet<String>,
@@ -114,7 +124,52 @@ fn render_project_diff_graph(
             .cloned()
             .collect::<BTreeSet<String>>(),
     );
+    let source_files = module_file_map(current_paths, previous_paths);
+    let changed_files = module_file_map(changed_paths, &[]);
 
+    let dot = render_dot_graph(
+        header_lines,
+        current_modules,
+        &added_modules,
+        &modified_modules,
+        &removed_modules,
+        &displayed_modules,
+        &source_files,
+        &changed_files,
+        non_rust_changed_files,
+    );
+    let mermaid = render_mermaid_graph(
+        current_modules,
+        &added_modules,
+        &modified_modules,
+        &removed_modules,
+        &displayed_modules,
+        &source_files,
+        &changed_files,
+        non_rust_changed_files,
+    );
+
+    GraphRender {
+        dot,
+        mermaid,
+        total_modules: current_modules.len(),
+        added_modules: added_modules.len(),
+        modified_modules: modified_modules.len(),
+        removed_modules: removed_modules.len(),
+    }
+}
+
+fn render_dot_graph(
+    header_lines: &[String],
+    current_modules: &BTreeSet<String>,
+    added_modules: &BTreeSet<String>,
+    modified_modules: &BTreeSet<String>,
+    removed_modules: &BTreeSet<String>,
+    displayed_modules: &BTreeSet<String>,
+    source_files: &BTreeMap<String, Vec<String>>,
+    changed_files: &BTreeMap<String, Vec<String>>,
+    non_rust_changed_files: &[String],
+) -> String {
     let mut out = String::new();
     out.push_str("digraph cratetrace {\n");
     out.push_str(
@@ -137,17 +192,20 @@ fn render_project_diff_graph(
         "  workspace [fillcolor=gray97, style=\"rounded,filled,bold\", label=\"workspace\"];\n",
     );
 
-    for module in &displayed_modules {
+    for module in displayed_modules {
         out.push_str(&render_module_node(
             module,
             current_modules,
-            &added_modules,
-            &modified_modules,
-            &removed_modules,
+            added_modules,
+            modified_modules,
+            removed_modules,
+            displayed_modules,
+            source_files,
+            changed_files,
         ));
     }
 
-    for module in &displayed_modules {
+    for module in displayed_modules {
         if let Some(parent) = parent_module(module) {
             if displayed_modules.contains(&parent) {
                 out.push_str(&format!(
@@ -176,13 +234,76 @@ fn render_project_diff_graph(
 
     out.push_str("}\n");
 
-    GraphRender {
-        dot: out,
-        total_modules: current_modules.len(),
-        added_modules: added_modules.len(),
-        modified_modules: modified_modules.len(),
-        removed_modules: removed_modules.len(),
+    out
+}
+
+fn render_mermaid_graph(
+    current_modules: &BTreeSet<String>,
+    added_modules: &BTreeSet<String>,
+    modified_modules: &BTreeSet<String>,
+    removed_modules: &BTreeSet<String>,
+    displayed_modules: &BTreeSet<String>,
+    source_files: &BTreeMap<String, Vec<String>>,
+    changed_files: &BTreeMap<String, Vec<String>>,
+    non_rust_changed_files: &[String],
+) -> String {
+    let mut out = String::new();
+    out.push_str("flowchart TD\n");
+    out.push_str("  classDef workspace fill:#f8fafc,stroke:#475569,stroke-width:2px,color:#0f172a;\n");
+    out.push_str("  classDef unchanged fill:#eff6ff,stroke:#64748b,color:#0f172a;\n");
+    out.push_str("  classDef added fill:#dcfce7,stroke:#15803d,color:#14532d;\n");
+    out.push_str("  classDef modified fill:#fef3c7,stroke:#b45309,color:#78350f;\n");
+    out.push_str("  classDef removed fill:#fee2e2,stroke:#b91c1c,color:#7f1d1d,stroke-dasharray: 5 3;\n");
+    out.push_str("  classDef note fill:#f8fafc,stroke:#64748b,color:#334155,stroke-dasharray: 4 2;\n");
+    out.push_str("  workspace[\"workspace\"]\n");
+    out.push_str("  class workspace workspace;\n");
+
+    for module in displayed_modules {
+        let details = module_details(
+            module,
+            current_modules,
+            added_modules,
+            modified_modules,
+            removed_modules,
+            displayed_modules,
+            source_files,
+            changed_files,
+        );
+        let node_id = node_id(module);
+        out.push_str(&format!(
+            "  {node_id}[\"{}\"]\n",
+            render_mermaid_module_label(&details)
+        ));
+        out.push_str(&format!(
+            "  class {node_id} {};\n",
+            mermaid_class_for_module(&details)
+        ));
     }
+
+    for module in displayed_modules {
+        if let Some(parent) = parent_module(module) {
+            if displayed_modules.contains(&parent) {
+                out.push_str(&format!(
+                    "  {} --> {}\n",
+                    node_id(&parent),
+                    node_id(module)
+                ));
+            }
+        } else {
+            out.push_str(&format!("  workspace --> {}\n", node_id(module)));
+        }
+    }
+
+    if !non_rust_changed_files.is_empty() {
+        out.push_str(&format!(
+            "  non_rust[\"{}\"]\n",
+            escape_mermaid_label(&non_rust_note(non_rust_changed_files))
+        ));
+        out.push_str("  class non_rust note;\n");
+        out.push_str("  workspace -.-> non_rust\n");
+    }
+
+    out
 }
 
 fn render_module_node(
@@ -191,25 +312,38 @@ fn render_module_node(
     added_modules: &BTreeSet<String>,
     modified_modules: &BTreeSet<String>,
     removed_modules: &BTreeSet<String>,
+    displayed_modules: &BTreeSet<String>,
+    source_files: &BTreeMap<String, Vec<String>>,
+    changed_files: &BTreeMap<String, Vec<String>>,
 ) -> String {
     let node_id = node_id(module);
-    let label = escape_dot_label(module);
+    let details = module_details(
+        module,
+        current_modules,
+        added_modules,
+        modified_modules,
+        removed_modules,
+        displayed_modules,
+        source_files,
+        changed_files,
+    );
+    let label = escape_dot_label(&render_dot_module_label(&details));
 
-    if removed_modules.contains(module) {
+    if details.status == "removed" {
         return format!(
             "  {node_id} [fillcolor=mistyrose, style=\"rounded,filled,dashed\", label=\"{label}\"];\n"
         );
     }
 
-    if added_modules.contains(module) {
+    if details.status == "added" {
         return format!("  {node_id} [fillcolor=palegreen, label=\"{label}\"];\n");
     }
 
-    if modified_modules.contains(module) {
+    if details.status == "modified" {
         return format!("  {node_id} [fillcolor=khaki1, label=\"{label}\"];\n");
     }
 
-    if current_modules.contains(module) {
+    if details.status == "unchanged" {
         return format!("  {node_id} [fillcolor=aliceblue, label=\"{label}\"];\n");
     }
 
@@ -303,6 +437,20 @@ fn rust_module_label(path: &Path) -> Option<String> {
         .map(|component| component.to_string_lossy().to_string())
         .collect();
 
+    if parts.len() >= 3 && parts.first().is_some_and(|part| part == "crates") {
+        let crate_name = sanitize_module_segment(parts[1].as_str());
+        let layout_root = parts[2].clone();
+        let root = match layout_root.as_str() {
+            "src" => format!("crate::{crate_name}"),
+            "tests" => format!("tests::{crate_name}"),
+            "examples" => format!("examples::{crate_name}"),
+            "benches" => format!("benches::{crate_name}"),
+            _ => return None,
+        };
+        parts.drain(0..3);
+        return normalize_module_parts(&root, parts);
+    }
+
     let prefix = parts.first()?.clone();
     match prefix.as_str() {
         "src" => {
@@ -343,6 +491,10 @@ fn normalize_module_parts(root: &str, mut parts: Vec<String>) -> Option<String> 
     }
 
     Some(format!("{root}::{}", parts.join("::")))
+}
+
+fn sanitize_module_segment(value: &str) -> String {
+    value.replace('-', "_")
 }
 
 fn non_rust_note(files: &[String]) -> String {
@@ -386,10 +538,244 @@ fn escape_html(value: &str) -> String {
         .replace('"', "&quot;")
 }
 
+#[derive(Debug, Clone)]
+struct ModuleDetails {
+    module: String,
+    stereotype: &'static str,
+    status: &'static str,
+    rust_file_count: usize,
+    direct_child_count: usize,
+    changed_file_count: usize,
+    source_hint: String,
+    changed_hint: Option<String>,
+}
+
+fn module_details(
+    module: &str,
+    current_modules: &BTreeSet<String>,
+    added_modules: &BTreeSet<String>,
+    modified_modules: &BTreeSet<String>,
+    removed_modules: &BTreeSet<String>,
+    displayed_modules: &BTreeSet<String>,
+    source_files: &BTreeMap<String, Vec<String>>,
+    changed_files: &BTreeMap<String, Vec<String>>,
+) -> ModuleDetails {
+    let status = module_status(
+        module,
+        current_modules,
+        added_modules,
+        modified_modules,
+        removed_modules,
+    );
+    let direct_files = source_files.get(module).cloned().unwrap_or_default();
+    let direct_child_count = displayed_modules
+        .iter()
+        .filter(|candidate| parent_module(candidate).as_deref() == Some(module))
+        .count();
+    let rust_files = subtree_paths(module, source_files);
+    let changed = subtree_paths(module, changed_files);
+    let stereotype = module_stereotype(module, direct_files.is_empty());
+
+    ModuleDetails {
+        module: module.to_string(),
+        stereotype,
+        status,
+        rust_file_count: rust_files.len(),
+        direct_child_count,
+        changed_file_count: changed.len(),
+        source_hint: summarize_paths(
+            if direct_files.is_empty() {
+                vec!["synthetic container".to_string()]
+            } else {
+                direct_files
+            },
+            2,
+        ),
+        changed_hint: if changed.is_empty() {
+            None
+        } else {
+            Some(summarize_paths(changed, 2))
+        },
+    }
+}
+
+fn module_status(
+    module: &str,
+    current_modules: &BTreeSet<String>,
+    added_modules: &BTreeSet<String>,
+    modified_modules: &BTreeSet<String>,
+    removed_modules: &BTreeSet<String>,
+) -> &'static str {
+    if removed_modules.contains(module) {
+        return "removed";
+    }
+    if added_modules.contains(module) {
+        return "added";
+    }
+    if modified_modules.contains(module) {
+        return "modified";
+    }
+    if current_modules.contains(module) {
+        return "unchanged";
+    }
+    "context"
+}
+
+fn module_stereotype(module: &str, synthetic: bool) -> &'static str {
+    if synthetic {
+        return "package";
+    }
+    if module == "crate"
+        || module
+            .strip_prefix("crate::")
+            .is_some_and(|suffix| !suffix.contains("::"))
+    {
+        return "crate root";
+    }
+    if module
+        .strip_prefix("tests::")
+        .is_some_and(|suffix| !suffix.contains("::"))
+        || module.starts_with("tests")
+    {
+        return "test module";
+    }
+    if module
+        .strip_prefix("examples::")
+        .is_some_and(|suffix| !suffix.contains("::"))
+        || module.starts_with("examples")
+    {
+        return "example module";
+    }
+    if module
+        .strip_prefix("benches::")
+        .is_some_and(|suffix| !suffix.contains("::"))
+        || module.starts_with("benches")
+    {
+        return "benchmark module";
+    }
+    "module"
+}
+
+fn subtree_paths(module: &str, paths: &BTreeMap<String, Vec<String>>) -> Vec<String> {
+    let mut collected = BTreeSet::new();
+
+    for (candidate_module, candidate_paths) in paths {
+        if candidate_module == module || is_descendant_module(candidate_module, module) {
+            for path in candidate_paths {
+                collected.insert(path.clone());
+            }
+        }
+    }
+
+    collected.into_iter().collect()
+}
+
+fn is_descendant_module(candidate: &str, module: &str) -> bool {
+    candidate
+        .strip_prefix(module)
+        .is_some_and(|suffix| suffix.starts_with("::"))
+}
+
+fn summarize_paths(paths: Vec<String>, limit: usize) -> String {
+    if paths.is_empty() {
+        return "none".to_string();
+    }
+
+    let overflow = paths.len().saturating_sub(limit);
+    let mut summary = paths
+        .into_iter()
+        .take(limit)
+        .collect::<Vec<String>>()
+        .join(", ");
+    if overflow > 0 {
+        summary.push_str(&format!(", +{overflow} more"));
+    }
+    summary
+}
+
+fn render_dot_module_label(details: &ModuleDetails) -> String {
+    let mut lines = vec![
+        details.module.clone(),
+        format!("<<{}>> {}", details.stereotype, details.status),
+        format!(
+            "files: {} | children: {} | changed: {}",
+            details.rust_file_count, details.direct_child_count, details.changed_file_count
+        ),
+        format!("source: {}", details.source_hint),
+    ];
+
+    if let Some(changed_hint) = &details.changed_hint {
+        lines.push(format!("touched: {changed_hint}"));
+    }
+
+    lines.join("\n")
+}
+
+fn render_mermaid_module_label(details: &ModuleDetails) -> String {
+    let mut lines = vec![
+        details.module.clone(),
+        format!("<<{}>> {}", details.stereotype, details.status),
+        format!(
+            "files: {} | children: {} | changed: {}",
+            details.rust_file_count, details.direct_child_count, details.changed_file_count
+        ),
+        format!("source: {}", details.source_hint),
+    ];
+
+    if let Some(changed_hint) = &details.changed_hint {
+        lines.push(format!("touched: {changed_hint}"));
+    }
+
+    escape_mermaid_label(&lines.join("\n"))
+}
+
+fn mermaid_class_for_module(details: &ModuleDetails) -> &'static str {
+    match details.status {
+        "removed" => "removed",
+        "added" => "added",
+        "modified" => "modified",
+        "unchanged" => "unchanged",
+        _ => "note",
+    }
+}
+
+fn module_file_map(current_paths: &[PathBuf], previous_paths: &[PathBuf]) -> BTreeMap<String, Vec<String>> {
+    let mut files = BTreeSet::new();
+
+    for path in current_paths.iter().chain(previous_paths.iter()) {
+        if rust_module_label(path).is_some() {
+            files.insert(path.display().to_string());
+        }
+    }
+
+    let mut by_module = BTreeMap::new();
+    for file in files {
+        let path = PathBuf::from(&file);
+        if let Some(module) = rust_module_label(&path) {
+            by_module.entry(module).or_insert_with(Vec::new).push(file);
+        }
+    }
+
+    by_module
+}
+
+fn escape_mermaid_label(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\n', "<br/>")
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{expand_with_ancestors, normalize_module_parts, parent_module};
+    use super::{
+        escape_mermaid_label, expand_with_ancestors, normalize_module_parts, parent_module,
+        rust_module_label,
+    };
     use std::collections::BTreeSet;
+    use std::path::PathBuf;
 
     #[test]
     fn normalizes_root_files() {
@@ -420,5 +806,25 @@ mod tests {
         assert!(expanded.contains("crate"));
         assert!(expanded.contains("crate::core"));
         assert!(expanded.contains("crate::core::item"));
+    }
+
+    #[test]
+    fn escapes_mermaid_labels() {
+        assert_eq!(
+            escape_mermaid_label("crate::core\n\"quoted\""),
+            "crate::core<br/>&quot;quoted&quot;"
+        );
+    }
+
+    #[test]
+    fn maps_workspace_member_modules() {
+        assert_eq!(
+            rust_module_label(&PathBuf::from("crates/cratetrace-core/src/graph.rs")),
+            Some("crate::cratetrace_core::graph".to_string())
+        );
+        assert_eq!(
+            rust_module_label(&PathBuf::from("crates/cratetrace-core/src/lib.rs")),
+            Some("crate::cratetrace_core".to_string())
+        );
     }
 }
