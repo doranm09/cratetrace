@@ -43,7 +43,9 @@ For a platform-specific Marketplace release:
 
 1. Build `cratetrace-cli` for the target platform
 2. Copy it into `extensions/vscode/bin/` as `cratetrace-cli` or `cratetrace-cli.exe`
-3. Package or publish the extension with `vsce --target <platform>`
+3. Confirm `package.json` Marketplace metadata is release-ready (`publisher`, `version`, `repository`, `homepage`, `bugs`, `license`, `keywords`, and `icon`)
+4. Run a packaging check (`vsce package --no-dependencies`) to validate Marketplace metadata and icon wiring
+5. Package or publish the extension with `vsce --target <platform>`
 
 VS Code will install the matching platform package when you publish platform-specific VSIX artifacts.
 
