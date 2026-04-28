@@ -79,7 +79,7 @@ The extension resolves the CLI in this order:
 - bundled `bin/cratetrace-cli` or `bin/cratetrace-cli.exe`
 - `cratetrace-cli` on `PATH`
 
-For published builds, bundle the CLI inside the extension under `bin/`.
+For published builds, bundle the CLI inside the extension under `bin/`, then run `npm --prefix extensions/vscode run verify` before tagging a release.
 
 During development, point the extension at the local CLI binary using the `cratetrace.cliPath` setting. That will usually be:
 

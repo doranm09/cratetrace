@@ -43,7 +43,10 @@ For a platform-specific Marketplace release:
 
 1. Build `cratetrace-cli` for the target platform
 2. Copy it into `extensions/vscode/bin/` as `cratetrace-cli` or `cratetrace-cli.exe`
-3. Package or publish the extension with `vsce --target <platform>`
+3. Run `npm run verify` (mandatory before tagging a release)
+4. Package or publish the extension with `vsce --target <platform>`
+
+`npm run verify` checks required files, `bin/` bundle expectations, and required non-placeholder manifest fields.
 
 VS Code will install the matching platform package when you publish platform-specific VSIX artifacts.
 
